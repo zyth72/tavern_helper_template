@@ -148,10 +148,14 @@ export function determineNightHolder(storyTime: Date, settings: Settings): strin
   return 名字 ?? null;
 }
 
-/** 启动时从当前聊天世界书恢复夜班持有者缓存 */
+/** 启动时从当前聊天世界书恢复夜班持有者缓存 (仅读取, 不创建世界书) */
 export async function restoreNightHolderCache(): Promise<void> {
   try {
-    const worldbook_name = await getOrCreateChatWorldbook('current');
+    const worldbook_name = getChatWorldbookName('current');
+    if (!worldbook_name) {
+      console.info('[值班与乱入] 当前聊天没有绑定世界书, 跳过夜班持有者缓存恢复');
+      return;
+    }
     const entries = await getWorldbook(worldbook_name);
     const entry = entries.find(entry => entry.name === 夜班持有者条目名);
     const 日期 = entry?.content.match(/日期：(\d{4}-\d{2}-\d{2})/)?.[1];
@@ -185,7 +189,12 @@ export function resetNightHolderCache(): void {
  */
 async function 持久化夜班持有者(夜班日: string, 名字: string): Promise<void> {
   try {
-    const worldbook_name = await getOrCreateChatWorldbook('current');
+    // 只写入当前聊天已绑定的世界书, 不创建新世界书
+    const worldbook_name = getChatWorldbookName('current');
+    if (!worldbook_name) {
+      console.warn('[值班与乱入] 当前聊天没有绑定世界书, 不创建新世界书, 跳过夜班持有者条目写入');
+      return;
+    }
     const content = `日期：${夜班日}\n夜班持有者：${名字}`;
     const entries = await getWorldbook(worldbook_name);
     if (entries.some(entry => entry.name === 夜班持有者条目名)) {
