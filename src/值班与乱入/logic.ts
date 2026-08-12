@@ -129,6 +129,10 @@ let 夜班持有者缓存: { 夜班日: string; 名字: string } | null = null;
 export function determineNightHolder(storyTime: Date, settings: Settings): string | null {
   const period = getShiftPeriod(storyTime, settings);
   if (period !== '夜间' && period !== '早晨') {
+    // 白天/安息日: 删除夜班持有者条目 (不重新选择, 下一晚夜间时段再确定)
+    if (夜班持有者缓存) {
+      void 清除夜班持有者条目();
+    }
     return null;
   }
   const 夜班日 = getNightShiftDate(storyTime, settings);
@@ -174,6 +178,24 @@ export async function restoreNightHolderCache(): Promise<void> {
 /** 清空夜班持有者缓存 (聊天文件切换时调用) */
 export function resetNightHolderCache(): void {
   夜班持有者缓存 = null;
+}
+
+/**
+ * 白天/安息日时段: 删除当前聊天世界书中的"夜班持有者"条目并清空缓存.
+ * 不重新选择, 下一晚夜间时段再由 determineNightHolder 重新确定.
+ */
+async function 清除夜班持有者条目(): Promise<void> {
+  夜班持有者缓存 = null; // 立即清缓存, 避免重复触发删除
+  try {
+    const worldbook_name = getChatWorldbookName('current');
+    if (!worldbook_name) {
+      return;
+    }
+    await deleteWorldbookEntries(worldbook_name, entry => entry.name === 夜班持有者条目名);
+    console.info('[值班与乱入] 白天时段, 已删除夜班持有者条目 (次日夜间重新确定)');
+  } catch (error) {
+    console.warn('[值班与乱入] 删除夜班持有者条目失败', error);
+  }
 }
 
 /**
