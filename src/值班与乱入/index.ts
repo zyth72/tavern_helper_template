@@ -6,8 +6,6 @@ import {
   getActiveShipList,
   getShiftPeriod,
   getStoryTime,
-  resetNightHolderCache,
-  restoreNightHolderCache,
   runIntrusionCheck,
 } from './logic';
 import { useSettingsStore } from './settings';
@@ -24,18 +22,6 @@ $(() => {
     `[值班与乱入] 设置: 乱入阈值 ${settings.乱入检定阈值} | 夜班结束 ${settings.夜班结束时刻} | ` +
       `舰娘名单 ${getActiveShipList(settings).length} 人`,
   );
-
-  // 从当前角色卡主世界书恢复夜班持有者缓存
-  errorCatched(() => {
-    void restoreNightHolderCache();
-  })();
-
-  // 切换聊天文件时, 夜班持有者属于不同聊天的世界书, 需要重置缓存
-  eventOn(tavern_events.CHAT_CHANGED, () => {
-    console.info('[值班与乱入] 聊天文件已切换, 重置夜班持有者缓存');
-    resetNightHolderCache();
-    void restoreNightHolderCache();
-  });
 
   // 预设宏: {{乱入检定}} 展开为最近一次检定的完整结论
   registerMacroLike(/{{乱入检定}}/g, () => {
@@ -57,7 +43,7 @@ $(() => {
   // 触发时机: GENERATION_AFTER_COMMANDS (提示词合并前, 官方推荐注入时机).
   // 通过 option.automatic_trigger 区分: 后台/扩展自动触发 (true) 跳过, 用户手动操作 (发送消息、Regenerate 等) 执行.
   let 上次执行时间 = 0;
-  const 执行生成前检定 = () => {
+  const 执行生成前检定 = async () => {
     const now = Date.now();
     if (now - 上次执行时间 < 100) {
       return;
@@ -71,7 +57,8 @@ $(() => {
     console.info(`[值班与乱入] 剧情时间: ${formatDateTime(storyTime)} | 时段: ${period}`);
 
     // 夜间时段确定夜班持有者并持久化到角色卡主世界书条目; 非夜间时段删除该条目 (夜班结束)
-    const holder = determineNightHolder(storyTime, settings);
+    // 直接以世界书为准 (异步), 本次生成不等待, 条目写入对 AI 的生效从下一轮生成开始
+    const holder = await determineNightHolder(storyTime, settings);
     console.info(`[值班与乱入] 夜班持有者: ${holder ?? '（非值班时段，无需确定）'}`);
 
     const result = runIntrusionCheck(storyTime, period, settings);
@@ -106,6 +93,6 @@ $(() => {
     if (option?.automatic_trigger) {
       return;
     }
-    执行生成前检定();
+    void 执行生成前检定();
   });
 });

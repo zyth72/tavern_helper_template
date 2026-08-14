@@ -101,35 +101,45 @@ export function pickRandomShips(list: string[], n: number): string[] {
   return result;
 }
 
-/** 内存缓存: 避免生成前回调中异步读世界书导致错过提示词合并时机 (世界书条目的镜像) */
-let 夜班持有者缓存: { 夜班日: string; 名字: string } | null = null;
-let 夜班历史缓存: string[] = [];
-
 /**
- * 确定夜班持有者 (同步, 供生成前注入使用).
+ * 确定夜班持有者 (异步, 直接以世界书为准, 不使用内存缓存).
  * - 仅夜间时段需要; 其余时段 (白昼/空档/安息日) 删除"夜班持有者"条目, 夜班结束.
- * - 当晚已定 (缓存或世界书) 则沿用; 否则从名单随机选择, 排除历史选过的名字,
- *   并异步持久化到当前角色卡主世界书的"夜班持有者"条目与"夜班历史"条目.
+ * - 读当前角色卡主世界书: 已有条目且夜班日匹配则沿用; 否则从名单随机选择 (排除历史),
+ *   并写入"夜班持有者"条目与"夜班历史"条目.
  */
-export function determineNightHolder(storyTime: Date, settings: Settings): string | null {
+export async function determineNightHolder(storyTime: Date, settings: Settings): Promise<string | null> {
   const period = getShiftPeriod(storyTime, settings);
   if (period !== '夜间') {
     // 非夜间 (夜班结束时刻后/安息日): 夜班已结束, 删除持有者条目, 次日夜间再重新选择
     void 清除夜班持有者条目();
     return null;
   }
-  const 夜班日 = getNightShiftDate(storyTime, settings);
-  if (夜班持有者缓存?.夜班日 === 夜班日) {
-    console.info(`[值班与乱入] 夜班持有者沿用: ${夜班持有者缓存.名字} (夜班日 ${夜班日})`);
-    // 缓存可能与世界书不同步 (条目曾被清除/写入失败), 沿用名字的同时异步重新确保条目存在
-    void 持久化夜班持有者(夜班日, 夜班持有者缓存.名字);
-    return 夜班持有者缓存.名字;
+  const worldbook_name = getCharWorldbookName();
+  if (!worldbook_name) {
+    console.warn('[值班与乱入] 当前角色卡未绑定主世界书, 跳过夜班持有者确定');
+    return null;
   }
+  const 夜班日 = getNightShiftDate(storyTime, settings);
+  const entries = await getWorldbook(worldbook_name);
+  const holder_entry = entries.find(entry => entry.name === 夜班持有者条目名);
+  const 现有日期 = holder_entry?.content.match(/日期：(\d{4}-\d{2}-\d{2})/)?.[1];
+  const 现有名字 = holder_entry?.content.match(/夜班持有者：(.+)/)?.[1];
+  if (现有日期 === 夜班日 && 现有名字) {
+    console.info(`[值班与乱入] 夜班持有者沿用 (读世界书): ${现有名字} (夜班日 ${夜班日})`);
+    return 现有名字;
+  }
+  const history_entry = entries.find(entry => entry.name === 夜班历史条目名);
+  let 历史 = history_entry
+    ? history_entry.content
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+    : [];
   const 名单 = getActiveShipList(settings);
-  let 可用 = 名单.filter(name => !夜班历史缓存.includes(name));
+  let 可用 = 名单.filter(name => !历史.includes(name));
   if (可用.length === 0) {
     console.info('[值班与乱入] 名单中的舰娘已全部选过, 清空历史重新随机');
-    夜班历史缓存 = [];
+    历史 = [];
     可用 = 名单;
   }
   const 名字 = 可用[Math.floor(Math.random() * 可用.length)];
@@ -137,58 +147,19 @@ export function determineNightHolder(storyTime: Date, settings: Settings): strin
     console.warn('[值班与乱入] 夜班持有者选择失败: 名单为空');
     return null;
   }
-  夜班持有者缓存 = { 夜班日, 名字 };
-  夜班历史缓存.push(名字);
-  if (夜班历史缓存.length > 历史上限) {
+  历史.push(名字);
+  if (历史.length > 历史上限) {
     console.info(`[值班与乱入] 历史记录超过 ${历史上限} 条, 已清空`);
-    夜班历史缓存 = [];
+    历史 = [];
   }
   console.info(`[值班与乱入] 夜班持有者确定: ${名字} (随机选择), 夜班日 ${夜班日}, 正在写入世界书...`);
-  void 持久化夜班持有者(夜班日, 名字);
-  void 持久化夜班历史(夜班历史缓存);
+  await 持久化夜班持有者(夜班日, 名字);
+  await 持久化夜班历史(历史);
   return 名字;
-}
-
-/** 启动时从当前角色卡主世界书恢复缓存: 夜班持有者 + 夜班历史 (仅读取, 不创建世界书) */
-export async function restoreNightHolderCache(): Promise<void> {
-  try {
-    const worldbook_name = getCharWorldbookName();
-    if (!worldbook_name) {
-      console.info('[值班与乱入] 当前角色卡未绑定主世界书, 跳过夜班缓存恢复');
-      return;
-    }
-    const entries = await getWorldbook(worldbook_name);
-    const holder_entry = entries.find(entry => entry.name === 夜班持有者条目名);
-    const 日期 = holder_entry?.content.match(/日期：(\d{4}-\d{2}-\d{2})/)?.[1];
-    const 名字 = holder_entry?.content.match(/夜班持有者：(.+)/)?.[1];
-    if (日期 && 名字) {
-      夜班持有者缓存 = { 夜班日: 日期, 名字 };
-      console.info(`[值班与乱入] 已从世界书恢复夜班持有者: ${名字} (夜班日 ${日期})`);
-    } else {
-      console.info('[值班与乱入] 世界书暂无夜班持有者条目, 将在夜间时段确定');
-    }
-    const history_entry = entries.find(entry => entry.name === 夜班历史条目名);
-    if (history_entry) {
-      夜班历史缓存 = history_entry.content
-        .split('\n')
-        .map(line => line.trim())
-        .filter(Boolean);
-      console.info(`[值班与乱入] 已从世界书恢复夜班历史 (${夜班历史缓存.length} 条)`);
-    }
-  } catch {
-    // 未绑定主世界书或读取失败时忽略, 生成时再处理
-  }
-}
-
-/** 清空夜班缓存 (聊天文件切换时调用) */
-export function resetNightHolderCache(): void {
-  夜班持有者缓存 = null;
-  夜班历史缓存 = [];
 }
 
 /** 非夜间时段: 删除当前角色卡主世界书中的"夜班持有者"条目 (夜班已结束, 次日夜间重新确定) */
 async function 清除夜班持有者条目(): Promise<void> {
-  夜班持有者缓存 = null; // 立即清缓存, 避免重复触发删除
   try {
     const worldbook_name = getCharWorldbookName();
     if (!worldbook_name) {
@@ -210,7 +181,7 @@ async function 清除夜班持有者条目(): Promise<void> {
  * 夜班持有者：名字
  * ```
  * - `日期` 为夜班日 (跨午夜归属前一天的夜间时段)
- * - 解析见 `restoreNightHolderCache` 中的正则
+ * - 解析见 `determineNightHolder` 中的正则
  */
 async function 持久化夜班持有者(夜班日: string, 名字: string): Promise<void> {
   try {
