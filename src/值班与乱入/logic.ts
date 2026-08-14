@@ -8,52 +8,18 @@ export type ShiftPeriod = '安息日' | '夜间' | '白昼' | '空档';
 const 夜间开始 = 22 * 60;
 /** 白昼结束 18:00, 之后为空档 */
 const 白昼结束 = 18 * 60;
+/** 历史记录条数上限, 超过则整体清空重新累计 */
+const 历史上限 = 350;
+
+/** chat 变量 key: 当前夜班持有者 (存 { 夜班日, 名字 }) */
+const 夜班持有者变量key = '夜班持有者';
+/** chat 变量 key: 历史选过的夜班舰娘 (存 string[]) */
+const 夜班历史变量key = '夜班历史';
 
 /** 解析 HH:mm 为分钟数 */
 function parseTime(hhmm: string): number {
   const [hour, minute] = hhmm.split(':').map(Number);
   return (hour || 0) * 60 + (minute || 0);
-}
-
-/** 世界书条目名: 记录当前夜班持有者 (启用, 注入 AI 提示词) */
-const 夜班持有者条目名 = '夜班持有者';
-/** 世界书条目名: 记录历史选过的夜班舰娘 (禁用, 仅脚本读取, 不注入 AI) */
-const 夜班历史条目名 = '夜班历史';
-/** 历史记录条数上限, 超过则整体清空重新累计 */
-const 历史上限 = 350;
-
-/** 脚本变量中"夜班持有者"的存储 key (存 { 夜班日, 名字 }; 同步可读、跨脚本重载存活) */
-const 夜班持有者变量key = '夜班持有者';
-
-/**
- * 从脚本变量读取最近确定的夜班持有者 (同步; 仅用于注入, 判断仍以世界书为准).
- * 返回 null 表示从未确定过或已清空.
- */
-export function getLatestNightHolder(): { 夜班日: string; 名字: string } | null {
-  const value = getVariables({ type: 'script', script_id: getScriptId() })[夜班持有者变量key];
-  if (typeof value !== 'object' || value === null) {
-    return null;
-  }
-  const { 夜班日, 名字 } = value as { 夜班日?: unknown; 名字?: unknown };
-  return typeof 夜班日 === 'string' && typeof 名字 === 'string' ? { 夜班日, 名字 } : null;
-}
-
-/** 写入夜班持有者到脚本变量 */
-function 写入夜班持有者变量(夜班日: string, 名字: string): void {
-  insertOrAssignVariables({ [夜班持有者变量key]: { 夜班日, 名字 } }, { type: 'script', script_id: getScriptId() });
-}
-
-/** 清除脚本变量中的夜班持有者 */
-function 清除夜班持有者变量(): void {
-  deleteVariable(夜班持有者变量key, { type: 'script', script_id: getScriptId() });
-}
-
-/**
- * 获取当前角色卡的主世界书名称.
- * 本脚本为深度定制内容, 只为一张角色卡服务, 主世界书必然存在.
- */
-function getCharWorldbookName(): string | null {
-  return getCharWorldbookNames('current').primary;
 }
 
 function formatDate(date: Date): string {
@@ -127,43 +93,40 @@ export function pickRandomShips(list: string[], n: number): string[] {
   return result;
 }
 
-/**
- * 确定夜班持有者 (异步, 直接以世界书为准, 不使用内存缓存).
- * - 仅夜间时段需要; 其余时段 (白昼/空档/安息日) 删除"夜班持有者"条目, 夜班结束.
- * - 读当前角色卡主世界书: 已有条目且夜班日匹配则沿用; 否则从名单随机选择 (排除历史),
- *   并写入"夜班持有者"条目与"夜班历史"条目.
- */
-export async function determineNightHolder(storyTime: Date, settings: Settings): Promise<string | null> {
-  const period = getShiftPeriod(storyTime, settings);
-  if (period !== '夜间') {
-    // 非夜间 (夜班结束时刻后/安息日): 夜班已结束, 删除持有者条目, 次日夜间再重新选择
-    清除夜班持有者变量();
-    void 清除夜班持有者条目();
+/** 从 chat 变量读取夜班历史 (同步; 非法内容按空处理) */
+function 读夜班历史(): string[] {
+  const value = getVariables({ type: 'chat' })[夜班历史变量key];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+/** 读取当前夜班持有者 (同步; 仅用于注入, 判断同样以该 chat 变量为准) */
+export function getLatestNightHolder(): { 夜班日: string; 名字: string } | null {
+  const value = getVariables({ type: 'chat' })[夜班持有者变量key];
+  if (typeof value !== 'object' || value === null) {
     return null;
   }
-  const worldbook_name = getCharWorldbookName();
-  if (!worldbook_name) {
-    console.warn('[值班与乱入] 当前角色卡未绑定主世界书, 跳过夜班持有者确定');
-    清除夜班持有者变量();
+  const { 夜班日, 名字 } = value as { 夜班日?: unknown; 名字?: unknown };
+  return typeof 夜班日 === 'string' && typeof 名字 === 'string' ? { 夜班日, 名字 } : null;
+}
+
+/**
+ * 确定夜班持有者 (同步, 以 chat 变量为准).
+ * - 仅夜间时段需要; 其余时段 (白昼/空档/安息日) 清空持有者变量, 夜班结束.
+ * - 已有持有者且夜班日匹配则沿用; 否则从名单随机选择 (排除历史), 并写入 chat 变量.
+ */
+export function determineNightHolder(storyTime: Date, settings: Settings): string | null {
+  const period = getShiftPeriod(storyTime, settings);
+  if (period !== '夜间') {
+    deleteVariable(夜班持有者变量key, { type: 'chat' });
     return null;
   }
   const 夜班日 = getNightShiftDate(storyTime, settings);
-  const entries = await getWorldbook(worldbook_name);
-  const holder_entry = entries.find(entry => entry.name === 夜班持有者条目名);
-  const 现有日期 = holder_entry?.content.match(/日期：(\d{4}-\d{2}-\d{2})/)?.[1];
-  const 现有名字 = holder_entry?.content.match(/夜班持有者：(.+)/)?.[1];
-  if (现有日期 === 夜班日 && 现有名字) {
-    console.info(`[值班与乱入] 夜班持有者沿用 (读世界书): ${现有名字} (夜班日 ${夜班日})`);
-    写入夜班持有者变量(夜班日, 现有名字);
-    return 现有名字;
+  const 现有 = getLatestNightHolder();
+  if (现有 && 现有.夜班日 === 夜班日) {
+    console.info(`[值班与乱入] 夜班持有者沿用: ${现有.名字} (夜班日 ${夜班日})`);
+    return 现有.名字;
   }
-  const history_entry = entries.find(entry => entry.name === 夜班历史条目名);
-  let 历史 = history_entry
-    ? history_entry.content
-        .split('\n')
-        .map(line => line.trim())
-        .filter(Boolean)
-    : [];
+  let 历史 = 读夜班历史();
   const 名单 = getActiveShipList(settings);
   let 可用 = 名单.filter(name => !历史.includes(name));
   if (可用.length === 0) {
@@ -181,105 +144,26 @@ export async function determineNightHolder(storyTime: Date, settings: Settings):
     console.info(`[值班与乱入] 历史记录超过 ${历史上限} 条, 已清空`);
     历史 = [];
   }
-  console.info(`[值班与乱入] 夜班持有者确定: ${名字} (随机选择), 夜班日 ${夜班日}, 正在写入世界书...`);
-  写入夜班持有者变量(夜班日, 名字);
-  await 持久化夜班持有者(夜班日, 名字);
-  await 持久化夜班历史(历史);
+  insertOrAssignVariables({ [夜班持有者变量key]: { 夜班日, 名字 } }, { type: 'chat' });
+  insertOrAssignVariables({ [夜班历史变量key]: 历史 }, { type: 'chat' });
+  console.info(`[值班与乱入] 夜班持有者确定: ${名字} (随机选择), 夜班日 ${夜班日}`);
   return 名字;
 }
 
-/** 非夜间时段: 删除当前角色卡主世界书中的"夜班持有者"条目 (夜班已结束, 次日夜间重新确定) */
-async function 清除夜班持有者条目(): Promise<void> {
-  try {
-    const worldbook_name = getCharWorldbookName();
-    if (!worldbook_name) {
-      return;
-    }
-    await deleteWorldbookEntries(worldbook_name, entry => entry.name === 夜班持有者条目名);
-    console.info('[值班与乱入] 非夜间时段, 已删除夜班持有者条目 (次日夜间重新确定)');
-  } catch (error) {
-    console.warn('[值班与乱入] 删除夜班持有者条目失败', error);
-  }
-}
-
-/**
- * 将夜班持有者写入当前角色卡主世界书的"夜班持有者"条目 (不存在则创建).
- *
- * 条目内容使用固定格式, 脚本与酒馆均可直接读取:
- * ```
- * 日期：YYYY-MM-DD
- * 夜班持有者：名字
- * ```
- * - `日期` 为夜班日 (跨午夜归属前一天的夜间时段)
- * - 解析见 `determineNightHolder` 中的正则
- */
-async function 持久化夜班持有者(夜班日: string, 名字: string): Promise<void> {
-  try {
-    // 只写入当前角色卡已绑定的主世界书, 不创建新世界书
-    const worldbook_name = getCharWorldbookName();
-    if (!worldbook_name) {
-      console.warn('[值班与乱入] 当前角色卡未绑定主世界书, 跳过夜班持有者条目写入');
-      return;
-    }
-    const content = `日期：${夜班日}\n夜班持有者：${名字}`;
-    const entries = await getWorldbook(worldbook_name);
-    if (entries.some(entry => entry.name === 夜班持有者条目名)) {
-      await updateWorldbookWith(
-        worldbook_name,
-        worldbook => worldbook.map(entry => (entry.name === 夜班持有者条目名 ? { ...entry, content } : entry)),
-      );
-    } else {
-      await createWorldbookEntries(worldbook_name, [
-        {
-          name: 夜班持有者条目名,
-          content,
-          enabled: true,
-          strategy: { type: 'constant' },
-          position: { type: 'after_character_definition', order: 100 },
-        },
-      ]);
-    }
-    console.info(`[值班与乱入] 夜班持有者条目已写入世界书 '${worldbook_name}': ${content.replace(/\n/g, ' | ')}`);
-  } catch (error) {
-    console.warn('[值班与乱入] 写入夜班持有者条目失败', error);
-  }
-}
-
-/**
- * 将历史选过的夜班舰娘写入当前角色卡主世界书的"夜班历史"条目 (不存在则创建).
- *
- * - 条目为禁用状态 (enabled: false), 不会注入 AI 提示词, 仅供脚本读取;
- * - 内容为每行一个名字;
- * - 条数超过 `历史上限` 时已由 `determineNightHolder` 清空, 此处写入清空后的内容.
- */
-async function 持久化夜班历史(历史: string[]): Promise<void> {
-  try {
-    const worldbook_name = getCharWorldbookName();
-    if (!worldbook_name) {
-      return;
-    }
-    const content = 历史.join('\n');
-    const entries = await getWorldbook(worldbook_name);
-    if (entries.some(entry => entry.name === 夜班历史条目名)) {
-      await updateWorldbookWith(
-        worldbook_name,
-        worldbook => worldbook.map(entry => (entry.name === 夜班历史条目名 ? { ...entry, content } : entry)),
-      );
-    } else {
-      await createWorldbookEntries(worldbook_name, [
-        {
-          name: 夜班历史条目名,
-          content,
-          enabled: false,
-          strategy: { type: 'constant' },
-          position: { type: 'after_character_definition', order: 100 },
-        },
-      ]);
-    }
-    console.info(`[值班与乱入] 夜班历史条目已写入世界书 '${worldbook_name}' (${历史.length} 条)`);
-  } catch (error) {
-    console.warn('[值班与乱入] 写入夜班历史条目失败', error);
-  }
+/** 注册 chat 变量结构, 便于变量管理器查看/多设备核对 */
+export function registerNightHolderSchema(): void {
+  registerVariableSchema(
+    z.object({
+      [夜班持有者变量key]: z
+        .object({
+          夜班日: z.string(),
+          名字: z.string(),
+        })
+        .optional(),
+      [夜班历史变量key]: z.array(z.string()).optional(),
+    }),
+    { type: 'chat' },
+  );
 }
 
 /** 乱入检定写入酒馆变量的结构化数据 */

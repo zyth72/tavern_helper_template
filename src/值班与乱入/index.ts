@@ -4,10 +4,9 @@ import {
   formatDateTime,
   formatIntrusionResult,
   getActiveShipList,
-  getLatestNightHolder,
-  getNightShiftDate,
   getShiftPeriod,
   getStoryTime,
+  registerNightHolderSchema,
   runIntrusionCheck,
 } from './logic';
 import { useSettingsStore } from './settings';
@@ -25,11 +24,9 @@ $(() => {
       `舰娘名单 ${getActiveShipList(settings).length} 人`,
   );
 
-  // 加载时若为夜间, 预确定夜班持有者 (读世界书, 无则随机生成写入), 让首次生成即可注入
+  // 注册 chat 变量结构, 便于在变量管理器中查看夜班持有者/历史 (多设备同步核对)
   errorCatched(() => {
-    void determineNightHolder(getStoryTime(), settings).catch(error => {
-      console.warn('[值班与乱入] 加载时预确定夜班持有者失败', error);
-    });
+    registerNightHolderSchema();
   })();
 
   // 预设宏: {{乱入检定}} 展开为最近一次检定的完整结论
@@ -47,8 +44,8 @@ $(() => {
     return `<乱入舰娘>\n${乱入.候选舰娘.join('\n')}\n</乱入舰娘>`;
   });
 
-  // 每次生成前: 确定夜班持有者并写入世界书条目; 执行乱入检定,
-  // 结果写入酒馆变量 (供预设宏读取), 同时注入提示词 (should_scan 激活世界书设定条目)
+  // 每次生成前: 确定夜班持有者 (同步, 读写 chat 变量); 执行乱入检定;
+  // 结果写入酒馆变量 (供预设宏读取), 同时注入提示词 (发给 AI + should_scan 激活世界书设定条目)
   // 触发时机: GENERATION_AFTER_COMMANDS (提示词合并前, 官方推荐注入时机).
   // 通过 option.automatic_trigger 区分: 后台/扩展自动触发 (true) 跳过, 用户手动操作 (发送消息、Regenerate 等) 执行.
   let 上次执行时间 = 0;
@@ -65,14 +62,9 @@ $(() => {
     console.info(`[值班与乱入] ── 生成前处理 ──`);
     console.info(`[值班与乱入] 剧情时间: ${formatDateTime(storyTime)} | 时段: ${period}`);
 
-    // 夜班持有者: 以世界书为准, 异步确定并写入条目 (不阻塞本次生成, 下轮生效)
-    void determineNightHolder(storyTime, settings)
-      .then(holder => {
-        console.info(`[值班与乱入] 夜班持有者: ${holder ?? '（非值班时段，无需确定）'}`);
-      })
-      .catch(error => {
-        console.warn('[值班与乱入] 夜班持有者确定失败', error);
-      });
+    // 夜班持有者: 同步确定 (以 chat 变量为准), 当轮即可注入
+    const holder = determineNightHolder(storyTime, settings);
+    console.info(`[值班与乱入] 夜班持有者: ${holder ?? '（非值班时段，无需确定）'}`);
 
     // 乱入检定: 同步执行, 保证本次生成的注入与变量写入生效
     const result = runIntrusionCheck(storyTime, period, settings);
@@ -81,18 +73,12 @@ $(() => {
       console.info(`[值班与乱入] 候选舰娘(${result.变量.候选舰娘.length}): ${result.变量.候选舰娘.join('、')}`);
     }
 
-    // 乱入检定结果写入脚本变量 (顶层 key `乱入`, 与设置字段互不干扰)
+    // 检定结果写入脚本变量 (顶层 key `乱入`, 与设置字段互不干扰)
     insertOrAssignVariables({ 乱入: result.变量 }, { type: 'script', script_id: getScriptId() });
     console.info(`[值班与乱入] 已写入酒馆变量: ${JSON.stringify(result.变量)}`);
 
-    // 夜间时把夜班持有者名字发给 AI 并加入扫描文本: 世界书蓝灯条目内容不参与关键字扫描,
-    // 因此同步注入 (in_chat 发给 AI, should_scan 触发她的角色详情条目); 每次生成重新注入不累积
-    // 注入前校验夜班日匹配, 防止跨夜 Regenerate 读到上一晚的持有者
-    const 当前持有者 = period === '夜间' ? getLatestNightHolder() : null;
-    const 当前夜班日 = period === '夜间' ? getNightShiftDate(storyTime, settings) : null;
-    const 持有者名字 =
-      当前持有者 && 当前夜班日 && 当前持有者.夜班日 === 当前夜班日 ? 当前持有者.名字 : null;
-
+    // 注入提示词: 乱入检定结果 (in_chat 发给 AI + should_scan);
+    // 夜间追加夜班持有者名字 (in_chat 发给 AI + should_scan 触发她的角色详情条目)
     injectPrompts(
       [
         {
@@ -101,17 +87,16 @@ $(() => {
           depth: 0,
           role: 'system',
           content: result.文本,
-          // 让命中文本中的候选舰娘名字进入世界书关键字扫描, 自动激活对应设定条目
           should_scan: true,
         },
-        ...(持有者名字
+        ...(holder
           ? [
               {
                 id: '夜班持有者',
                 position: 'in_chat' as const,
                 depth: 0,
                 role: 'system' as const,
-                content: `夜班持有者：${持有者名字}`,
+                content: `夜班持有者：${holder}`,
                 should_scan: true,
               },
             ]
@@ -128,14 +113,5 @@ $(() => {
       return;
     }
     执行生成前检定();
-  });
-
-  // 用户发送消息时预确定夜班持有者: 早于提示词合并, 读世界书写入内存变量,
-  // 无条目则随机指定并写入世界书, 保证 GENERATION_AFTER_COMMANDS 注入时名字已就绪
-  eventOn(tavern_events.MESSAGE_SENT, () => {
-    const { settings } = useSettingsStore();
-    void determineNightHolder(getStoryTime(), settings).catch(error => {
-      console.warn('[值班与乱入] 消息发送时预确定夜班持有者失败', error);
-    });
   });
 });
