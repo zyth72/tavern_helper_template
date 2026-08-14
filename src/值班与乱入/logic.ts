@@ -174,7 +174,7 @@ export async function restoreNightHolderCache(): Promise<void> {
       console.info(`[值班与乱入] 已从世界书恢复夜班历史 (${夜班历史缓存.length} 条)`);
     }
   } catch {
-    // 没有聊天文件时忽略, 生成时再处理
+    // 未绑定主世界书或读取失败时忽略, 生成时再处理
   }
 }
 
