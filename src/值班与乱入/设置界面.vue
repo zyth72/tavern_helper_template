@@ -57,6 +57,18 @@ const 自定义名单文本 = computed({
   flex: 0 0 auto;
 }
 
+/* 深色背景下输入框需要深色底 + 浅色字, 否则白底白字看不清 */
+.shift-intrusion-settings input[type='time'],
+.shift-intrusion-settings input[type='number'],
+.shift-intrusion-settings textarea {
+  background-color: #2a2a2a !important;
+  color: #e8e8e8 !important;
+  border: 1px solid #555 !important;
+  border-radius: 4px !important;
+  padding: 4px 6px !important;
+  color-scheme: dark; /* 原生 time picker / 滚动条适配深色 */
+}
+
 .shift-intrusion-settings .flex-container input[type='time'],
 .shift-intrusion-settings .flex-container input[type='number'] {
   width: 120px;
