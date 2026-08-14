@@ -5,6 +5,7 @@ import {
   formatIntrusionResult,
   getActiveShipList,
   getLatestNightHolder,
+  getNightShiftDate,
   getShiftPeriod,
   getStoryTime,
   runIntrusionCheck,
@@ -86,7 +87,11 @@ $(() => {
 
     // 夜间时把夜班持有者名字发给 AI 并加入扫描文本: 世界书蓝灯条目内容不参与关键字扫描,
     // 因此同步注入 (in_chat 发给 AI, should_scan 触发她的角色详情条目); 每次生成重新注入不累积
-    const 持有者 = period === '夜间' ? getLatestNightHolder() : null;
+    // 注入前校验夜班日匹配, 防止跨夜 Regenerate 读到上一晚的持有者
+    const 当前持有者 = period === '夜间' ? getLatestNightHolder() : null;
+    const 当前夜班日 = period === '夜间' ? getNightShiftDate(storyTime, settings) : null;
+    const 持有者名字 =
+      当前持有者 && 当前夜班日 && 当前持有者.夜班日 === 当前夜班日 ? 当前持有者.名字 : null;
 
     injectPrompts(
       [
@@ -99,14 +104,14 @@ $(() => {
           // 让命中文本中的候选舰娘名字进入世界书关键字扫描, 自动激活对应设定条目
           should_scan: true,
         },
-        ...(持有者
+        ...(持有者名字
           ? [
               {
                 id: '夜班持有者',
                 position: 'in_chat' as const,
                 depth: 0,
                 role: 'system' as const,
-                content: `夜班持有者：${持有者}`,
+                content: `夜班持有者：${持有者名字}`,
                 should_scan: true,
               },
             ]
