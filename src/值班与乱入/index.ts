@@ -21,11 +21,11 @@ $(() => {
   const { settings } = useSettingsStore();
   console.info('[值班与乱入] 脚本已加载');
   console.info(
-    `[值班与乱入] 设置: 起床 ${settings.起床时刻} | 交还 ${settings.交还时刻} | 乱入阈值 ${settings.乱入检定阈值} | ` +
-      `扫描楼层 ${settings.最近楼层扫描数} | 舰娘名单 ${getActiveShipList(settings).length} 人`,
+    `[值班与乱入] 设置: 乱入阈值 ${settings.乱入检定阈值} | 夜班结束 ${settings.夜班结束时刻} | ` +
+      `舰娘名单 ${getActiveShipList(settings).length} 人`,
   );
 
-  // 从当前聊天世界书恢复夜班持有者缓存
+  // 从当前角色卡主世界书恢复夜班持有者缓存
   errorCatched(() => {
     void restoreNightHolderCache();
   })();
@@ -70,7 +70,7 @@ $(() => {
     console.info(`[值班与乱入] ── 生成前处理 ──`);
     console.info(`[值班与乱入] 剧情时间: ${formatDateTime(storyTime)} | 时段: ${period}`);
 
-    // 夜间/早晨时段确定夜班持有者并持久化到聊天世界书条目 (由世界书提供)
+    // 夜间时段确定夜班持有者并持久化到角色卡主世界书条目; 非夜间时段删除该条目 (夜班结束)
     const holder = determineNightHolder(storyTime, settings);
     console.info(`[值班与乱入] 夜班持有者: ${holder ?? '（非值班时段，无需确定）'}`);
 

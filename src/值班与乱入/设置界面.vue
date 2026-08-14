@@ -7,23 +7,13 @@
       </div>
       <div class="inline-drawer-content">
         <div class="flex-container">
-          <label for="shift-wake-time">起床时刻（夜间至此时为止）</label>
-          <input id="shift-wake-time" v-model="settings.起床时刻" type="time" />
-        </div>
-
-        <div class="flex-container">
-          <label for="shift-handover-time">交还时刻（早晨至此时为止）</label>
-          <input id="shift-handover-time" v-model="settings.交还时刻" type="time" />
-        </div>
-
-        <div class="flex-container">
           <label for="intrusion-threshold">乱入检定阈值（1d100 ≥ 阈值即命中）</label>
           <input id="intrusion-threshold" v-model.number="settings.乱入检定阈值" type="number" min="1" max="100" />
         </div>
 
         <div class="flex-container">
-          <label for="scan-depth">"上下文已指名"扫描最近楼层数</label>
-          <input id="scan-depth" v-model.number="settings.最近楼层扫描数" type="number" min="1" max="100" />
+          <label for="night-end-time">夜班结束时刻（到点删除夜班持有者条目）</label>
+          <input id="night-end-time" v-model="settings.夜班结束时刻" type="time" />
         </div>
 
         <div class="flex-container">
