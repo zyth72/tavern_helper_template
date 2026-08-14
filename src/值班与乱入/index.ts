@@ -4,6 +4,7 @@ import {
   formatDateTime,
   formatIntrusionResult,
   getActiveShipList,
+  getLatestNightHolder,
   getShiftPeriod,
   getStoryTime,
   runIntrusionCheck,
@@ -72,9 +73,14 @@ $(() => {
       console.info(`[值班与乱入] 候选舰娘(${result.变量.候选舰娘.length}): ${result.变量.候选舰娘.join('、')}`);
     }
 
-    // 检定结果写入脚本变量 (顶层 key `乱入`, 与设置字段互不干扰)
+    // 乱入检定结果写入脚本变量 (顶层 key `乱入`, 与设置字段互不干扰)
     insertOrAssignVariables({ 乱入: result.变量 }, { type: 'script', script_id: getScriptId() });
     console.info(`[值班与乱入] 已写入酒馆变量: ${JSON.stringify(result.变量)}`);
+
+    // 夜间时把夜班持有者名字加入扫描文本: 异步写入的世界书条目本轮尚不存在,
+    // 蓝灯条目内容也不参与关键字扫描, 因此这里同步注入 should_scan 文本, 让名字当轮
+    // 进入扫描以触发她的角色详情条目 (position 'none' 不发 AI, 避免与蓝灯条目重复)
+    const 持有者 = period === '夜间' ? getLatestNightHolder() : null;
 
     injectPrompts(
       [
@@ -87,6 +93,18 @@ $(() => {
           // 让命中文本中的候选舰娘名字进入世界书关键字扫描, 自动激活对应设定条目
           should_scan: true,
         },
+        ...(持有者
+          ? [
+              {
+                id: '夜班持有者',
+                position: 'none' as const,
+                depth: 0,
+                role: 'system' as const,
+                content: `夜班持有者：${持有者}`,
+                should_scan: true,
+              },
+            ]
+          : []),
       ],
       { once: true },
     );

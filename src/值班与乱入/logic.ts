@@ -23,6 +23,18 @@ const 夜班历史条目名 = '夜班历史';
 const 历史上限 = 350;
 
 /**
+ * 最近一次确定的夜班持有者名字.
+ * 仅用于同步注入 should_scan 扫描文本 (让名字当轮进入关键字扫描、触发角色详情),
+ * 不参与任何判断 —— 判断始终以世界书为准 (异步).
+ */
+let 最近夜班持有者: string | null = null;
+
+/** 获取最近确定的夜班持有者名字 (同步, 供生成前注入扫描文本使用) */
+export function getLatestNightHolder(): string | null {
+  return 最近夜班持有者;
+}
+
+/**
  * 获取当前角色卡的主世界书名称.
  * 本脚本为深度定制内容, 只为一张角色卡服务, 主世界书必然存在.
  */
@@ -111,12 +123,14 @@ export async function determineNightHolder(storyTime: Date, settings: Settings):
   const period = getShiftPeriod(storyTime, settings);
   if (period !== '夜间') {
     // 非夜间 (夜班结束时刻后/安息日): 夜班已结束, 删除持有者条目, 次日夜间再重新选择
+    最近夜班持有者 = null;
     void 清除夜班持有者条目();
     return null;
   }
   const worldbook_name = getCharWorldbookName();
   if (!worldbook_name) {
     console.warn('[值班与乱入] 当前角色卡未绑定主世界书, 跳过夜班持有者确定');
+    最近夜班持有者 = null;
     return null;
   }
   const 夜班日 = getNightShiftDate(storyTime, settings);
@@ -126,6 +140,7 @@ export async function determineNightHolder(storyTime: Date, settings: Settings):
   const 现有名字 = holder_entry?.content.match(/夜班持有者：(.+)/)?.[1];
   if (现有日期 === 夜班日 && 现有名字) {
     console.info(`[值班与乱入] 夜班持有者沿用 (读世界书): ${现有名字} (夜班日 ${夜班日})`);
+    最近夜班持有者 = 现有名字;
     return 现有名字;
   }
   const history_entry = entries.find(entry => entry.name === 夜班历史条目名);
@@ -153,6 +168,7 @@ export async function determineNightHolder(storyTime: Date, settings: Settings):
     历史 = [];
   }
   console.info(`[值班与乱入] 夜班持有者确定: ${名字} (随机选择), 夜班日 ${夜班日}, 正在写入世界书...`);
+  最近夜班持有者 = 名字;
   await 持久化夜班持有者(夜班日, 名字);
   await 持久化夜班历史(历史);
   return 名字;
