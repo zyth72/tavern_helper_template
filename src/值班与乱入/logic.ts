@@ -121,6 +121,8 @@ export function determineNightHolder(storyTime: Date, settings: Settings): strin
   const 夜班日 = getNightShiftDate(storyTime, settings);
   if (夜班持有者缓存?.夜班日 === 夜班日) {
     console.info(`[值班与乱入] 夜班持有者沿用: ${夜班持有者缓存.名字} (夜班日 ${夜班日})`);
+    // 缓存可能与世界书不同步 (条目曾被清除/写入失败), 沿用名字的同时异步重新确保条目存在
+    void 持久化夜班持有者(夜班日, 夜班持有者缓存.名字);
     return 夜班持有者缓存.名字;
   }
   const 名单 = getActiveShipList(settings);
